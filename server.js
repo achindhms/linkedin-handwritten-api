@@ -11,6 +11,8 @@ const { renderPostcard } = require('./lib/render');
 const { FONTS, INKS, PAPERS } = require('./lib/fonts');
 const { validateGenerateBody, validateBulkBody } = require('./lib/validate');
 const { requireApiKey, trackUsage, getUsageSnapshot, hasAuthConfigured } = require('./lib/auth');
+const { createKey, listKeys } = require('./lib/keystore');
+const { signupForm, signupResult, tryPage } = require('./lib/pages');
 
 const PORT = process.env.PORT || 3000;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -21,14 +23,12 @@ app.use(helmet());
 app.use(compression());
 app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true }));
 
 app.use(cors({
   origin: ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : true,
 }));
 
-// A generous but real rate limit — this is a free-tier tool meant for automation
-// workloads (n8n), not a public-facing product, so this exists mainly to stop
-// runaway loops/misconfigured workflows from hammering it, not to gate normal use.
 const limiter = rateLimit({
   windowMs: 60 * 1000,
   max: Number(process.env.RATE_LIMIT_PER_MINUTE || 60),
@@ -46,6 +46,8 @@ app.get('/', (req, res) => {
     endpoints: {
       'GET /health': 'Uptime check',
       'GET /fonts': 'Valid font/ink/paper/layout values',
+      'GET /signup': 'Self-serve — get your own API key (no approval needed)',
+      'GET /try': 'Interactive browser tool to test the API without writing code',
       'POST /generate': 'Render one postcard',
       'POST /generate/bulk': 'Render a list of recipients as a ZIP',
       'GET /stats': 'Usage counters for your API key (requires x-api-key)',
@@ -69,17 +71,27 @@ app.get('/stats', requireApiKey, (req, res) => {
   res.json({ usage: getUsageSnapshot() });
 });
 
-/**
- * POST /generate
- * Body: {
- *   name, company,               // shorthand — merged into `fields` automatically
- *   fields: { role, dealSize },  // any extra custom merge tags, all optional
- *   message: "Hey {{name}} ...", // required
- *   font, ink, paper, layout,    // all optional, see GET /fonts for valid values
- *   logoUrl,                    // optional, postcard layout only
- *   format: "png" | "base64"    // defaults to "png" (binary response)
- * }
- */
+app.get('/signup', (req, res) => {
+  res.type('html').send(signupForm());
+});
+
+app.post('/signup', (req, res) => {
+  const { name, email } = req.body || {};
+  if (!name || !email) {
+    return res.status(400).type('html').send(signupForm({ error: 'Name and email are both required.' }));
+  }
+  const record = createKey({ name, email });
+  res.type('html').send(signupResult({ key: record.key }));
+});
+
+app.get('/try', (req, res) => {
+  res.type('html').send(tryPage());
+});
+
+app.get('/admin/keys', requireApiKey, (req, res) => {
+  res.json({ keys: listKeys() });
+});
+
 app.post('/generate', requireApiKey, async (req, res) => {
   const check = validateGenerateBody(req.body);
   if (!check.ok) return res.status(400).json({ error: check.error });
@@ -114,14 +126,6 @@ app.post('/generate', requireApiKey, async (req, res) => {
   }
 });
 
-/**
- * POST /generate/bulk
- * Body: {
- *   recipients: [{ name, company, fields: {...}, logoUrl }, ...],  // required, max 500
- *   message, font, ink, paper, layout, bgImageUrl                  // shared across all recipients
- * }
- * Returns application/zip — one PNG per recipient, named postcard_001_<name>_<company>.png etc.
- */
 app.post('/generate/bulk', requireApiKey, async (req, res) => {
   const check = validateBulkBody(req.body);
   if (!check.ok) return res.status(400).json({ error: check.error });
@@ -169,12 +173,10 @@ app.post('/generate/bulk', requireApiKey, async (req, res) => {
   }
 });
 
-// 404 for anything else
 app.use((req, res) => {
   res.status(404).json({ error: 'Not found', hint: 'See GET / for a list of endpoints.' });
 });
 
-// Last-resort error handler so a thrown error never crashes the process or leaks a stack trace.
 app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
   console.error('Unhandled error:', err);
   if (res.headersSent) return next(err);
@@ -188,7 +190,6 @@ const server = app.listen(PORT, () => {
   }
 });
 
-// Graceful shutdown — important on platforms like Render that send SIGTERM on redeploys/restarts.
 function shutdown(signal) {
   console.log(`${signal} received, shutting down...`);
   server.close(() => process.exit(0));
