@@ -1,9 +1,5 @@
 // Downloads the .ttf files this API needs from Google Fonts into /fonts.
 // Run once after `npm install`: `npm run setup-fonts`
-//
-// Google Fonts serves woff2 to modern browsers and .ttf to older ones, so this
-// requests the stylesheet with an old-browser User-Agent to get a .ttf URL back —
-// node-canvas (built on Cairo/FreeType) wants .ttf/.otf, not .woff2.
 
 const fs = require('fs');
 const path = require('path');
@@ -28,11 +24,19 @@ const FONT_FILES = [
 const OLD_BROWSER_UA =
   'Mozilla/5.0 (Windows NT 6.1; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/30.0.1599.101 Safari/537.36';
 
-async function downloadFont({ family, file }) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function downloadFont({ family, file }, attempt = 1) {
   const query = encodeURIComponent(family).replace(/%20/g, '+');
   const cssUrl = `https://fonts.googleapis.com/css2?family=${query}&display=swap`;
   const cssRes = await fetch(cssUrl, { headers: { 'User-Agent': OLD_BROWSER_UA } });
-  if (!cssRes.ok) throw new Error(`Stylesheet request failed (${cssRes.status})`);
+  if (!cssRes.ok) {
+    if (cssRes.status === 429 && attempt < 4) {
+      await sleep(1500 * attempt);
+      return downloadFont({ family, file }, attempt + 1);
+    }
+    throw new Error(`Stylesheet request failed (${cssRes.status})`);
+  }
   const css = await cssRes.text();
   const match = css.match(/url\((https:[^)]+\.(?:ttf|otf))\)/);
   if (!match) throw new Error('No .ttf URL found in stylesheet (Google may have changed formats)');
@@ -55,14 +59,11 @@ async function downloadFont({ family, file }) {
       failures++;
       console.log(`FAILED (${e.message})`);
     }
+    await sleep(600); // space requests out so Google doesn't rate-limit the batch
   }
 
   if (failures > 0) {
-    console.log(
-      `\n${failures} font(s) failed to download automatically. ` +
-      `Grab them manually from https://fonts.google.com, unzip, and drop the .ttf into the /fonts folder ` +
-      `using the exact filenames listed in scripts/setup-fonts.js.`
-    );
+    console.log(`\n${failures} font(s) failed to download automatically. Re-run "npm run setup-fonts" — it's safe to run again, it'll just overwrite what's there.`);
   } else {
     console.log('\nAll fonts downloaded.');
   }
