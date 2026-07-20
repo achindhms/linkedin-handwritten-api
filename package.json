@@ -1,0 +1,26 @@
+{
+  "name": "postcard-api",
+  "version": "1.0.0",
+  "description": "Self-hosted API that renders handwritten notes / postcards as PNGs, for use with n8n or any HTTP client.",
+  "main": "server.js",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "setup-fonts": "node scripts/setup-fonts.js",
+    "ping": "node scripts/ping.js"
+  },
+  "dependencies": {
+    "archiver": "^7.0.1",
+    "canvas": "^2.11.2",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "express-rate-limit": "^7.4.0",
+    "helmet": "^7.1.0",
+    "morgan": "^1.10.0"
+  }
+}
